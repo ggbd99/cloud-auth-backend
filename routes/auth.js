@@ -26,12 +26,18 @@ const get = (sql, params) => new Promise((resolve, reject) => {
     });
 });
 
+// Input validation helper
+const isValidToken = (token) => {
+    return typeof token === 'string' && token.length > 0 && token.length < 10000;
+};
+
 // ADMIN REGISTRATION (Google OAuth)
 router.post('/register', async (req, res) => {
     const { google_token } = req.body;
 
-    if (!google_token) {
-        return res.status(400).json({ error: 'Google token is required' });
+    // Validate input
+    if (!google_token || !isValidToken(google_token)) {
+        return res.status(400).json({ error: 'Invalid request' });
     }
 
     try {
@@ -44,11 +50,15 @@ router.post('/register', async (req, res) => {
         const googleId = payload['sub'];
         const email = payload['email'];
 
+        if (!googleId || !email) {
+            return res.status(400).json({ error: 'Invalid authentication data' });
+        }
+
         // Check if admin already exists
         let admin = await get(`SELECT * FROM admins WHERE google_id = ? OR email = ?`, [googleId, email]);
 
         if (admin) {
-            return res.status(400).json({ error: 'Admin already registered' });
+            return res.status(400).json({ error: 'Account already exists' });
         }
 
         // Register new admin
@@ -57,10 +67,11 @@ router.post('/register', async (req, res) => {
             [googleId, email]
         );
 
-        res.json({ success: true, message: 'Admin registered successfully', adminId: result.lastID });
+        res.json({ success: true, message: 'Registration successful' });
     } catch (err) {
-        console.error('Registration error:', err);
-        res.status(500).json({ error: 'Registration failed' });
+        // Log full error internally but don't expose details
+        console.error('[REGISTRATION_ERROR]', err.message);
+        res.status(500).json({ error: 'Registration failed. Please try again.' });
     }
 });
 
@@ -68,8 +79,9 @@ router.post('/register', async (req, res) => {
 router.post('/admin-login', async (req, res) => {
     const { google_token } = req.body;
 
-    if (!google_token) {
-        return res.status(400).json({ error: 'Google token is required' });
+    // Validate input
+    if (!google_token || !isValidToken(google_token)) {
+        return res.status(400).json({ error: 'Invalid request' });
     }
 
     try {
@@ -81,6 +93,10 @@ router.post('/admin-login', async (req, res) => {
         const payload = ticket.getPayload();
         const googleId = payload['sub'];
         const email = payload['email'];
+
+        if (!googleId || !email) {
+            return res.status(401).json({ error: 'Authentication failed' });
+        }
 
         // Check if admin exists
         let admin = await get(`SELECT * FROM admins WHERE google_id = ?`, [googleId]);
@@ -94,7 +110,7 @@ router.post('/admin-login', async (req, res) => {
             admin = { id: result.lastID, email, google_id: googleId };
         }
 
-        // Generate Tokens
+        // Generate Tokens with shorter expiry for better security
         const accessToken = jwt.sign({ adminId: admin.id, email: admin.email }, JWT_SECRET, { expiresIn: '15m' });
         const refreshToken = jwt.sign({ adminId: admin.id }, REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -104,7 +120,9 @@ router.post('/admin-login', async (req, res) => {
         res.json({ accessToken, refreshToken });
 
     } catch (err) {
-        console.error('Login error:', err);
+        // Log error internally without exposing details
+        console.error('[LOGIN_ERROR]', err.message);
+        // Generic error - don't reveal if account exists or specific failure reason
         res.status(401).json({ error: 'Authentication failed' });
     }
 });
@@ -112,7 +130,10 @@ router.post('/admin-login', async (req, res) => {
 // REFRESH TOKEN
 router.post('/refresh', async (req, res) => {
     const { refreshToken } = req.body;
-    if (!refreshToken) return res.sendStatus(401);
+
+    if (!refreshToken || !isValidToken(refreshToken)) {
+        return res.sendStatus(401);
+    }
 
     try {
         const storedToken = await get(`SELECT * FROM refresh_tokens WHERE token = ?`, [refreshToken]);
@@ -124,22 +145,26 @@ router.post('/refresh', async (req, res) => {
             res.json({ accessToken });
         });
     } catch (err) {
-        console.error('Token refresh error:', err);
-        res.status(500).json({ error: 'Token refresh failed' });
+        console.error('[REFRESH_ERROR]', err.message);
+        return res.sendStatus(403);
     }
 });
 
 // LOGOUT
 router.post('/logout', async (req, res) => {
     const { refreshToken } = req.body;
-    if (!refreshToken) return res.sendStatus(200);
+
+    if (!refreshToken || !isValidToken(refreshToken)) {
+        return res.sendStatus(200);
+    }
 
     try {
         await run(`DELETE FROM refresh_tokens WHERE token = ?`, [refreshToken]);
-        res.json({ message: 'Logged out' });
+        res.json({ message: 'Logged out successfully' });
     } catch (err) {
-        console.error('Logout error:', err);
-        res.status(500).json({ error: 'Logout failed' });
+        console.error('[LOGOUT_ERROR]', err.message);
+        // Don't reveal error details
+        return res.sendStatus(200);
     }
 });
 
