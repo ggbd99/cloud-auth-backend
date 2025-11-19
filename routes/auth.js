@@ -26,6 +26,44 @@ const get = (sql, params) => new Promise((resolve, reject) => {
     });
 });
 
+// ADMIN REGISTRATION (Google OAuth)
+router.post('/register', async (req, res) => {
+    const { google_token } = req.body;
+
+    if (!google_token) {
+        return res.status(400).json({ error: 'Google token is required' });
+    }
+
+    try {
+        // Verify Google Token
+        const ticket = await client.verifyIdToken({
+            idToken: google_token,
+            audience: GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+        const googleId = payload['sub'];
+        const email = payload['email'];
+
+        // Check if admin already exists
+        let admin = await get(`SELECT * FROM admins WHERE google_id = ? OR email = ?`, [googleId, email]);
+
+        if (admin) {
+            return res.status(400).json({ error: 'Admin already registered' });
+        }
+
+        // Register new admin
+        const result = await run(
+            `INSERT INTO admins (google_id, email) VALUES (?, ?)`,
+            [googleId, email]
+        );
+
+        res.json({ success: true, message: 'Admin registered successfully', adminId: result.lastID });
+    } catch (err) {
+        console.error('Registration error:', err);
+        res.status(500).json({ error: 'Registration failed' });
+    }
+});
+
 // ADMIN LOGIN (Google OAuth)
 router.post('/admin-login', async (req, res) => {
     const { google_token } = req.body;
